@@ -1,0 +1,16 @@
+{
+  "42": {
+    "number": 42,
+    "title": "App crashes on login with empty email",
+    "body": "When I click the 'Login' button while the email field is empty, the whole app crashes with an error instead of showing a friendly validation message. Steps: 1) open login page 2) leave email blank 3) click Login. Expected: a validation error. Actual: crash.",
+    "labels": ["bug", "auth"],
+    "state": "open"
+  },
+  "43": {
+    "number": 43,
+    "title": "Add a truncate helper for long titles",
+    "body": "We keep cutting long titles manually all over the UI. Please add a reusable helper that shortens a string to a max length and adds an ellipsis.",
+    "labels": ["enhancement"],
+    "state": "open"
+  }
+}

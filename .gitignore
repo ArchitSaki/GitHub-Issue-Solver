@@ -1,0 +1,23 @@
+# --- Secrets: NEVER commit the real .env (it holds API keys) ---------------
+.env
+
+# --- Python virtual environment (huge, machine-specific) -------------------
+.venv/
+venv/
+
+# --- Python bytecode / caches ----------------------------------------------
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# --- Generated at runtime: rebuilt by the app, not source code -------------
+.vectordb/
+.memorydb/
+.mock_prs/
+
+# --- Editor / OS junk -------------------------------------------------------
+.vscode/
+.idea/
+Thumbs.db
+Desktop.ini

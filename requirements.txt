@@ -1,0 +1,38 @@
+# ============================================================================
+# requirements.txt — every Python package this project needs, and WHY.
+# Install with:  pip install -r requirements.txt
+# We use ">=" (minimum version) instead of pinning exact versions to keep it
+# simple for learning. In a real job you'd pin exact versions for reproducibility.
+# ============================================================================
+
+# --- Web backend ---------------------------------------------------------
+fastapi>=0.110            # turns our agent into a web API (the "front door")
+uvicorn[standard]>=0.29   # the server that actually runs FastAPI
+
+# --- LLM toolkit (LangChain family) --------------------------------------
+langchain>=0.2            # high-level helpers: prompts, chains, tools
+langchain-core>=0.2       # core building blocks (messages, runnables)
+langchain-community>=0.2  # community integrations (loaders, FastEmbed, utils)
+langchain-groq>=0.1       # connects LangChain to GROQ (fast, free-tier cloud LLM)
+
+# --- Orchestration -------------------------------------------------------
+langgraph>=0.2            # the "brain": graph of steps + shared state + loops
+
+# --- RAG (search the codebase) -------------------------------------------
+chromadb>=0.5             # local vector database to store code embeddings
+langchain-chroma>=0.1     # LangChain <-> Chroma glue
+fastembed>=0.3            # LOCAL, free embeddings (Groq has no embedding model)
+
+# --- Config & validation -------------------------------------------------
+pydantic>=2.6             # data validation (defines the shape of our data)
+pydantic-settings>=2.2    # loads settings from .env cleanly
+python-dotenv>=1.0        # reads the .env file
+
+# --- MCP (Model Context Protocol) ----------------------------------------
+mcp>=1.2                  # official SDK: exposes our tools over the MCP standard (server)
+langchain-mcp-adapters>=0.1  # lets our agent CONSUME MCP tools (client side)
+
+# --- Utilities -----------------------------------------------------------
+requests>=2.31            # HTTP calls (used for the real GitHub API)
+
+# NOTE: add "langchain-anthropic" / "langchain-openai" if you switch providers later.
