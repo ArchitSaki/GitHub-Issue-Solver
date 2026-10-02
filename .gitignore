@@ -1,6 +1,10 @@
+
+target_repo/
+
 # --- Secrets: NEVER commit the real .env (it holds API keys) ---------------
 .env
 
+sam
 # --- Python virtual environment (huge, machine-specific) -------------------
 .venv/
 venv/

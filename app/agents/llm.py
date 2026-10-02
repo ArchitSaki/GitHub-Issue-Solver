@@ -38,7 +38,7 @@ def get_llm(temperature: float = 0.0):
             api_key=settings.groq_api_key,
             temperature=temperature,
             # max_tokens caps the REPLY length -> protects us from runaway token use.
-            max_tokens=1024,
+            max_tokens=4096,
             timeout=60,
         )
 

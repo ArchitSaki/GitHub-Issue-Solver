@@ -12,6 +12,7 @@ HOW IT WORKS:
     (e.g. the field `llm_provider` is filled from `LLM_PROVIDER` in .env).
 """
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -39,6 +40,18 @@ class Settings(BaseSettings):
     github_mode: str = "mock"             # "mock" | "real"
     github_token: str = ""
     github_repo: str = "owner/repo"       # only used when github_mode == "real"
+
+    @field_validator("github_repo")
+    @classmethod
+    def clean_github_repo(cls, v: str) -> str:
+        """Strip https://github.com/ and .git if accidentally included."""
+        v = v.strip()
+        for prefix in ("https://github.com/", "http://github.com/", "github.com/"):
+            if v.startswith(prefix):
+                v = v[len(prefix):]
+        if v.endswith(".git"):
+            v = v[:-4]
+        return v.strip("/")
 
     # --- RAG ---
     vector_db_dir: str = ".vectordb"

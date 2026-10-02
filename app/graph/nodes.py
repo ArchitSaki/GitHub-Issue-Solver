@@ -24,7 +24,8 @@ from app.rag.retriever import search_code, format_context
 from app.tools.github_tools import get_issue, read_repo_file, open_pull_request
 from app.graph.state import SolverState
 
-MAX_ATTEMPTS = 2   # cap retries so a stubborn model can't loop forever (cost control)
+MAX_ATTEMPTS_BUG = 2      # bug fixes: 2 attempts is usually enough
+MAX_ATTEMPTS_FEATURE = 3  # features: allow one extra attempt (more creative, needs more room)
 
 
 # --- structured shapes we ask the LLM to fill (Phase 2 technique) ------------
@@ -45,9 +46,9 @@ class Understanding(BaseModel):
 
 class Review(BaseModel):
     verdict: Literal["approved", "rejected"] = Field(
-        description="'approved' if the fix is correct and complete, else 'rejected'"
+        description="'approved' if the change correctly addresses the issue, else 'rejected'"
     )
-    notes: str = Field(description="if rejected, what must be improved")
+    notes: str = Field(description="if rejected, what specifically must be improved")
 
 
 # ---------------------------------------------------------------------------
@@ -141,10 +142,11 @@ def _extract_code(text: str) -> str:
         return text.strip()
 
     block = text.split("```")[1]              # content of the first fence
-    # Drop a leading language tag like "python".
+    # Drop a leading language tag like "python", "html", "javascript", etc.
     if "\n" in block:
         first_line, rest = block.split("\n", 1)
-        if first_line.strip().lower() in {"python", "py", ""}:
+        tag = first_line.strip().lower()
+        if tag in {"python", "py", "html", "javascript", "js", "css", "json", "typescript", "ts", ""}:
             return rest.strip()
     return block.strip()
 
@@ -161,6 +163,8 @@ def _extract_explanation(text: str) -> str:
 def write_fix(state: SolverState) -> dict:
     print("[node] write_fix")
 
+    is_bug = state.get("is_bug", True)
+
     # Read the WHOLE target file: we must output its complete corrected content,
     # and RAG chunks alone may be partial.
     current = read_repo_file.invoke({"path": state["target_file"]})
@@ -168,23 +172,49 @@ def write_fix(state: SolverState) -> dict:
     # If a previous review rejected us, include the notes so we improve.
     retry_note = ""
     if state.get("review_notes") and not state.get("approved", False):
-        retry_note = f"\nA previous attempt was REJECTED. Fix this: {state['review_notes']}\n"
+        retry_note = f"\nA previous attempt was REJECTED. Improve it: {state['review_notes']}\n"
+
+    # --- Bug fix prompt: minimal, targeted, preserve existing behaviour ------
+    if is_bug:
+        prompt = (
+            "You are a senior engineer fixing a bug in a codebase.\n"
+            f"\nBUG: {state['summary']}\n"
+            f"\nSIMILAR PAST FIXES (for guidance):\n{state.get('past_experience', '')}\n"
+            f"\nFILE TO FIX: {state['target_file']}\n"
+            f"\nCURRENT CONTENT:\n{current}\n"
+            f"{retry_note}"
+            "\nRespond in EXACTLY this format and nothing else:\n"
+            "EXPLANATION: <one sentence explaining the root cause and the fix>\n"
+            "```\n"
+            "<the COMPLETE corrected file content — do NOT omit any unchanged part>\n"
+            "```\n"
+            "Rules: change as LITTLE as possible, keep the existing style."
+        )
+    # --- Feature request prompt: creative, additive, explain tradeoffs -------
+    else:
+        prompt = (
+            "You are a senior engineer implementing a feature request in a codebase.\n"
+            f"\nFEATURE REQUEST: {state['summary']}\n"
+            f"\nRELEVANT EXISTING CODE (context from RAG):\n{state.get('relevant_code', '')}\n"
+            f"\nSIMILAR PAST WORK (for guidance):\n{state.get('past_experience', '')}\n"
+            f"\nFILE TO MODIFY: {state['target_file']}\n"
+            f"\nCURRENT CONTENT:\n{current}\n"
+            f"{retry_note}"
+            "\nInstructions:\n"
+            "- Implement the feature request as faithfully as possible given the existing file.\n"
+            "- If the request requires changes beyond this single file (e.g. a full framework\n"
+            "  migration like plain HTML -> React), implement the best possible improvement\n"
+            "  WITHIN the current file's language/format and note the limitation in EXPLANATION.\n"
+            "- Do NOT omit any unchanged part of the file.\n"
+            "\nRespond in EXACTLY this format and nothing else:\n"
+            "EXPLANATION: <one sentence on what was added/changed and any limitations>\n"
+            "```\n"
+            "<the COMPLETE updated file content>\n"
+            "```"
+        )
 
     llm = get_llm()   # plain text call - no JSON schema to break
-    response = llm.invoke(
-        "You are fixing a bug in a Python file.\n"
-        f"\nISSUE: {state['summary']}\n"
-        f"\nSIMILAR PAST FIXES (for guidance):\n{state.get('past_experience', '')}\n"
-        f"\nFILE: {state['target_file']}\n"
-        f"\nCURRENT CONTENT:\n{current}\n"
-        f"{retry_note}"
-        "\nRespond in EXACTLY this format and nothing else:\n"
-        "EXPLANATION: <one sentence on why this fixes it>\n"
-        "```python\n"
-        "<the COMPLETE corrected file content>\n"
-        "```\n"
-        "Rules: keep the existing style, change as little as possible."
-    ).content
+    response = llm.invoke(prompt).content
 
     return {
         "fixed_code": _extract_code(response),
@@ -198,15 +228,34 @@ def write_fix(state: SolverState) -> dict:
 # ---------------------------------------------------------------------------
 def review(state: SolverState) -> dict:
     print("[node] review")
+    is_bug = state.get("is_bug", True)
     llm = get_llm().with_structured_output(Review)
-    r = _invoke_with_retry(
-        llm,
-        "Review this proposed fix. Approve only if it truly resolves the issue "
-        "and the code is valid.\n"
-        f"\nISSUE: {state['summary']}\n"
-        f"\nPROPOSED FILE CONTENT:\n{state['fixed_code']}\n"
-        f"\nAUTHOR'S EXPLANATION: {state['explanation']}",
-    )
+
+    if is_bug:
+        # Bug review: strict — the code must actually fix the defect.
+        review_prompt = (
+            "You are a code reviewer. Approve ONLY if the proposed change genuinely fixes "
+            "the reported bug and the code is syntactically valid.\n"
+            f"\nBUG: {state['summary']}\n"
+            f"\nPROPOSED FILE CONTENT:\n{state['fixed_code']}\n"
+            f"\nAUTHOR'S EXPLANATION: {state['explanation']}\n"
+            "\nApprove if the bug is addressed. Reject if the bug is not fixed or the code is broken."
+        )
+    else:
+        # Feature review: lenient — the change must add value towards the request.
+        # We do NOT reject just because the feature can't be fully implemented in one file.
+        review_prompt = (
+            "You are a code reviewer evaluating a feature request implementation.\n"
+            f"\nFEATURE REQUEST: {state['summary']}\n"
+            f"\nPROPOSED FILE CONTENT:\n{state['fixed_code']}\n"
+            f"\nAUTHOR'S EXPLANATION: {state['explanation']}\n"
+            "\nApprove if:\n"
+            "  - The change meaningfully moves towards the requested feature, OR\n"
+            "  - The author explains a valid limitation (e.g. framework migration needs more files).\n"
+            "Reject ONLY if the file content is unchanged, broken, or completely unrelated."
+        )
+
+    r = _invoke_with_retry(llm, review_prompt)
     approved = r.verdict == "approved"
     print(f"       -> approved={approved}")
     return {"approved": approved, "review_notes": r.notes}
@@ -230,8 +279,11 @@ def save_memory(state: SolverState) -> dict:
 # ---------------------------------------------------------------------------
 def open_pr(state: SolverState) -> dict:
     print("[node] open_pr")
+    # Use "Feat:" prefix for feature requests, "Fix:" for bugs.
+    # This follows the conventional commits standard (interviewers love this detail).
+    pr_prefix = "Fix" if state.get("is_bug", True) else "Feat"
     result = open_pull_request.invoke({
-        "title": f"Fix: {state['summary']}",
+        "title": f"{pr_prefix}: {state['summary']}",
         "body": state["explanation"],
         "file_path": state["target_file"],
         "new_content": state["fixed_code"],
@@ -246,11 +298,13 @@ def route_after_review(state: SolverState) -> str:
     """Conditional edge: 'approved' -> finish, 'retry' -> write_fix again.
 
     The attempts cap is what makes the loop SAFE (bounded cost).
+    Bugs get 2 attempts (tight, targeted). Features get 3 (more creative room).
     """
     if state.get("approved"):
         return "approved"
-    if state.get("attempts", 0) >= MAX_ATTEMPTS:
-        print(f"       -> not approved, but hit {MAX_ATTEMPTS} attempts. Shipping anyway.")
+    max_attempts = MAX_ATTEMPTS_BUG if state.get("is_bug", True) else MAX_ATTEMPTS_FEATURE
+    if state.get("attempts", 0) >= max_attempts:
+        print(f"       -> not approved, but hit {max_attempts} attempts. Shipping anyway.")
         return "approved"
     print("       -> rejected, retrying the fix")
     return "retry"

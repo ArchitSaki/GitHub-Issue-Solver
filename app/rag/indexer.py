@@ -26,7 +26,7 @@ from app.agents.llm import get_embeddings
 from app.config import settings
 
 # Which file types count as "code" we want to index.
-CODE_EXTENSIONS = {".py", ".js", ".ts", ".java", ".go", ".md", ".txt"}
+CODE_EXTENSIONS = {".py", ".js", ".ts", ".jsx", ".tsx", ".html", ".css", ".json", ".java", ".go", ".md", ".txt"}
 
 
 def _load_files(repo_dir: str) -> list[Document]:
@@ -66,6 +66,10 @@ def build_index(repo_dir: str = "sample_repo") -> int:
     docs = _load_files(repo_dir)          # 1. LOAD
     chunks = _split(docs)                  # 2. SPLIT
     print(f"[rag] {len(docs)} files -> {len(chunks)} chunks")
+
+    if not chunks:
+        print(f"[rag] WARNING: No code chunks found in '{repo_dir}'. Index was not created.")
+        return 0
 
     # 3. EMBED + 4. STORE happen together: Chroma embeds each chunk and saves it.
     Chroma.from_documents(
